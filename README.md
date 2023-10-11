@@ -10,7 +10,7 @@ tags:
 inference: true
 ---
 
-[![Replicate](https://replicate.com/yorickvp/temporalnet-xl/badge)](https://replicate.com/yorickvp/temporalnet-xl)
+[![Replicate](https://replicate.com/yorickvp/temporalnet-xl/badge)](https://replicate.com/yorickvp/temporalnet-xl) [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model%20Card-yellow)](https://huggingface.co/CiaraRowles/controlnet-temporalnet-sdxl-1.0)
     
 # TemporalNetXL
 
