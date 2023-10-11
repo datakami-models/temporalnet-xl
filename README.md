@@ -9,6 +9,8 @@ tags:
 - controlnet
 inference: true
 ---
+
+[![Replicate](https://replicate.com/yorickvp/temporalnet-xl/badge)](https://replicate.com/yorickvp/temporalnet-xl)
     
 # TemporalNetXL
 
