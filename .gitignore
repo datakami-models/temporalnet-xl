@@ -1,0 +1,7 @@
+venv/
+*.mp4
+weights/
+output_frames/
+frames/
+__pycache__
+.cog/

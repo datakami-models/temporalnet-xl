@@ -1,0 +1,26 @@
+# Configuration for Cog ⚙️
+# Reference: https://github.com/replicate/cog/blob/main/docs/yaml.md
+
+# $ pip install diffusers opencv-python torch accelerate transformers
+# $ HUGGINGFACE_HUB_CACHE=$PWD/weights runtemporalnetxl.py ...
+# $ cog build
+
+build:
+  gpu: true
+
+  system_packages:
+    - "libgl1-mesa-glx"
+    - "ffmpeg"
+
+  python_version: "3.11"
+
+  python_packages:
+    - "diffusers==0.21.4"
+    - "opencv-python==4.8.1.78"
+    - "torch==2.0.1"
+    - "accelerate==0.23.0"
+    - "transformers==4.34.0"
+  run:
+    - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.0.3/pget" && chmod +x /usr/local/bin/pget
+
+predict: "predict.py:Predictor"
