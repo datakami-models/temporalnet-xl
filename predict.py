@@ -2,22 +2,22 @@
 # https://github.com/replicate/cog/blob/main/docs/python.md
 
 from cog import BasePredictor, Input, Path
-from typing import Optional, List
 
 import os
 import subprocess
-
-os.environ["HUGGINGFACE_HUB_CACHE"] = "/dev/null"
-
 import cv2
 import torch
 import shutil
-from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel, UniPCMultistepScheduler
-from diffusers.utils import load_image
+
 import numpy as np
 from PIL import Image
 
 from weights import download_all_weights
+
+os.environ["HUGGINGFACE_HUB_CACHE"] = "/dev/null"
+
+from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel
+from diffusers.utils import load_image
 
 # files to download from the weights mirrors
 WEIGHT_FILES = [
@@ -64,18 +64,17 @@ WEIGHT_FILES = [
     }
 ]
 
-def split_video_into_frames(video_path, frames_dir, max_count=None):
+def split_video_into_frames(video_path: Path, frames_dir: Path, max_count=None):
 
-    if os.path.exists(frames_dir):
+    if frames_dir.exists():
         shutil.rmtree(frames_dir)
-    os.makedirs(frames_dir)
+    frames_dir.mkdir(parents=True)
     print("splitting video")
-    vidcap = cv2.VideoCapture(video_path)
+    vidcap = cv2.VideoCapture(str(video_path))
     success, image = vidcap.read()
     count = 0
     while success:
-        frame_path = os.path.join(frames_dir, f"frame{count:04d}.png")
-        cv2.imwrite(frame_path, image)
+        cv2.imwrite(str(frames_dir / f"frame{count:04d}.png"), image)
         success, image = vidcap.read()
         count += 1
         if max_count == count:
@@ -94,7 +93,7 @@ def get_fps(reference_video):
 
 def images_to_video(image_prefix, output_video, reference_video):
     fps = get_fps(reference_video)
-    cmd = f"ffmpeg -framerate {fps} -i {image_prefix}%04d.png {output_video}"
+    cmd = f"ffmpeg -hide_banner -framerate {fps} -i {image_prefix}%04d.png {output_video}"
     subprocess.run(cmd, shell=True)
 
 
@@ -122,45 +121,74 @@ class Predictor(BasePredictor):
         #pipe.enable_xformers_memory_efficient_attention()
         self.pipe.enable_model_cpu_offload()
 
+        # todo: scheduler, refine, and refine steps
     def predict(
         self,
-        prompt: str = Input(description="The stable diffusion prompt. Does what it says on the tin."),
-        video: Path = Input(description="The input video file."),
-        init_image_path: Path = Input(description="Path to the initial conditioning image. It is recommended you get the first frame, modify it to a good starting look with stable diffusion, and use that as the first generated frame, if unspecified it will use the first video frame (not recommended)", default=None),
-        seed: int = Input(description="Seed. Use this to get the same result", default=None),
-        max_frames: int = Input(description="Only use the first N frames of the output video. 0 to use all frames.", default=0, ge=0),
-        result_video: bool = Input(description="Return the output as a video. Otherwise, all frames are returned separately.", default=True)
-    ) -> List[Path]:
+        prompt: str = Input(
+            description="The stable diffusion prompt. Does what it says on the tin."
+        ),
+        negative_prompt: str = Input(
+            description="Input Negative Prompt",
+            default="",
+        ),
+        video: Path = Input(
+            description="The input video file."
+        ),
+        init_image_path: Path = Input(
+            description="Path to the initial conditioning image. It is recommended you get the first frame, modify it to a good starting look with stable diffusion, and use that as the first generated frame, if unspecified it will use the first video frame (not recommended)",
+            default=None
+        ),
+        seed: int = Input(
+            description="Seed. Use this to get the same result. Leave blank to randomize the seed",
+            default=None
+        ),
+        max_frames: int = Input(
+            description="Only use the first N frames of the output video. 0 to use all frames.",
+            default=0,
+            ge=0
+        ),
+        result_video: bool = Input(
+            description="Return the output as a video. Otherwise, all frames are returned separately.",
+            default=True
+        ),
+        num_inference_steps: int = Input(
+            description="Number of denoising steps",
+            default=20,
+            ge=1,
+            le=500
+        ),
+    ) -> list[Path]:
         """Run a single prediction on the model"""
-        frames_dir = "./frames"
-        output_frames_dir = "./output_frames"
-        split_video_into_frames(str(video), frames_dir, max_frames if max_frames != 0 else None)
+        if seed is None:
+            seed = int.from_bytes(os.urandom(2), "big")
+        print(f"Using seed: {seed}")
+        frames_dir = Path("./frames")
+        output_frames_dir = Path("./output_frames")
+        split_video_into_frames(video, frames_dir, max_frames if max_frames != 0 else None)
         
         # Clear and create output frames directory
-        if os.path.exists(output_frames_dir):
-            shutil.rmtree(output_frames_dir)
-        os.makedirs(output_frames_dir)
+        if output_frames_dir.exists():
+            shutil.rmtree(str(output_frames_dir))
+        output_frames_dir.mkdir(parents=True)
 
         # Load the initial conditioning image, if provided
+        first_frame = load_image(str(frames_dir / "frame0000.png"))
         if init_image_path is not None:
             print(f"using image {str(init_image_path)}")
-            last_generated_image = load_image(str(init_image_path))
+            last_generated_image = load_image(str(init_image_path)).resize(first_frame.size)
         else:
-            initial_frame_path = os.path.join(frames_dir, "frame0000.png")
-            last_generated_image = load_image(initial_frame_path)
+            last_generated_image = first_frame
 
-    
-        generator = torch.Generator() if seed is None else torch.manual_seed(seed)
+        generator = torch.manual_seed(seed)
 
         # Loop over the saved frames in numerical order
-        frame_files = sorted(os.listdir(frames_dir), key=frame_number)
+        frame_files = sorted(os.listdir(str(frames_dir)), key=frame_number)
         output_files = []
         output_files_canny = []
         
         for i, frame_file in enumerate(frame_files):
             # Use the original video frame to create Canny edge-detected image as the conditioning image for the first ControlNetModel
-            control_image_path = os.path.join(frames_dir, frame_file)
-            control_image = load_image(control_image_path)
+            control_image = load_image(str(frames_dir / frame_file))
             
             canny_image = np.array(control_image)
             canny_image = cv2.Canny(canny_image, 25, 200)
@@ -170,19 +198,23 @@ class Predictor(BasePredictor):
             
             # Generate image
             image = self.pipe(
-                prompt, num_inference_steps=20, generator=generator, image=[last_generated_image, canny_image], controlnet_conditioning_scale=[0.6, 0.7]
-                #prompt, num_inference_steps=20, generator=generator, image=canny_image, controlnet_conditioning_scale=0.5
+                prompt,
+                negative_prompt=negative_prompt,
+                num_inference_steps=num_inference_steps,
+                generator=generator,
+                image=[last_generated_image, canny_image], controlnet_conditioning_scale=[0.6, 0.7]
+                #image=canny_image, controlnet_conditioning_scale=0.5
             ).images[0]
             
             # Save the generated image to output folder
-            output_path = os.path.join(output_frames_dir, f"output{str(i).zfill(4)}.png")
-            image.save(output_path)
-            output_files.append(Path(output_path))
+            output_path = output_frames_dir / f"output{str(i).zfill(4)}.png"
+            image.save(str(output_path))
+            output_files.append(output_path)
             
             # Save the Canny image for reference
-            canny_image_path = os.path.join(output_frames_dir, f"outputcanny{str(i).zfill(4)}.png")
-            canny_image.save(canny_image_path)
-            output_files_canny.append(Path(canny_image_path))
+            canny_image_path = output_frames_dir / f"outputcanny{str(i).zfill(4)}.png"
+            canny_image.save(str(canny_image_path))
+            output_files_canny.append(canny_image_path)
             
             # Update the last_generated_image with the newly generated image for the next iteration
             last_generated_image = image
@@ -190,9 +222,14 @@ class Predictor(BasePredictor):
             print(f"Saved generated image for frame {i} to {output_path}")
 
         if result_video:
-            images_to_video(os.path.join(output_frames_dir, "output"), "output.mp4", str(video))
-            images_to_video(os.path.join(output_frames_dir, "outputcanny"), "output_canny.mp4", str(video))
-            return [Path("output.mp4"), Path("output_canny.mp4")]
+            # remove output.mp4 and output_canny.mp4
+            output_video = Path("output.mp4")
+            output_canny = Path("output_canny.mp4")
+            output_video.unlink(missing_ok=True)
+            output_canny.unlink(missing_ok=True)
+            images_to_video(Path(output_frames_dir) / "output", output_video, video)
+            images_to_video(Path(output_frames_dir) / "outputcanny", output_canny, video)
+            return [output_video, output_canny]
         else:
             return output_files + output_files_canny
 
